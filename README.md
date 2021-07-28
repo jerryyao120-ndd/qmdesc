@@ -51,4 +51,5 @@ cgr_mol=cgr.reactants[0]
 qm=qmdesc_cgr()
 result=qm.predict(cgr_mol)
 ```
+如果不需要索引原子，可直接使用原版本，见Doc
 
