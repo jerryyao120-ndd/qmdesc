@@ -5,7 +5,7 @@ from typing import Dict
 
 import pkg_resources
 import torch
-from qmdesc.featurization import mol2graph, get_atom_fdim, get_bond_fdim
+from qmdesc.featurization import mol2graph, get_atom_fdim, get_bond_fdim,mol2graph_mol
 from rdkit import Chem
 
 class ReactivityDescriptorHandler():
@@ -58,6 +58,21 @@ class ReactivityDescriptorHandler():
 
         return f_atoms, f_bonds, a2b, b2a, b2revb, a_scope, b_scope, b2br, bond_types
 
+    def _preprocessmol(self, mol):
+        """
+        Preprocess SMILES
+
+        :param smiles: SMILES string
+        :return: molecular graph
+        """
+        mol_graph = mol2graph_mol(mol)
+        f_atoms, f_bonds, a2b, b2a, b2revb, a_scope, b_scope, b2br, bond_types = mol_graph.get_components()
+        f_atoms, f_bonds, a2b, b2a, b2revb, b2br, bond_types = \
+            f_atoms.to(self.device), f_bonds.to(self.device), a2b.to(self.device), b2a.to(self.device), \
+            b2revb.to(self.device), b2br.to(self.device), bond_types.to(self.device)
+
+        return f_atoms, f_bonds, a2b, b2a, b2revb, a_scope, b_scope, b2br, bond_types    
+
     def _inference(self, data):
         """
         model prediction
@@ -77,16 +92,21 @@ class ReactivityDescriptorHandler():
         :return: Results
         """
 
-        smiles = inference_output['smiles']
+        # smiles = inference_output['smiles']
         descs = inference_output['descs']
 
         descs = [x.data.cpu().numpy() for x in descs]
 
         partial_charge, partial_neu, partial_elec, NMR, bond_order, bond_distance = descs
 
-        results = {'smiles': smiles, 'partial_charge': partial_charge.flatten(), 'fukui_neu': partial_neu.flatten(),
-                   'fukui_elec': partial_elec.flatten(), 'NMR': NMR.flatten(), 'bond_order': bond_order.flatten(),
-                   'bond_length': bond_distance.flatten()}
+        results = {
+            # 'smiles': smiles,
+            'partial_charge': partial_charge.flatten(),
+            'fukui_neu': partial_neu.flatten(),
+            'fukui_elec': partial_elec.flatten(), 
+            'NMR': NMR.flatten(), 
+            'bond_order': bond_order.flatten(),
+            'bond_length': bond_distance.flatten()}
         return results
 
     def predict(self,
@@ -124,6 +144,43 @@ class ReactivityDescriptorHandler():
             m.SetProp('_Name', name)
 
             writer.write(m)
+
+        return results
+    
+    def predict_mol(self,
+                mol,
+                sdf: str = None) -> Dict:
+        """
+        Wrap the preprocess, inference, and postprocess
+
+        :param smiles: Input SMILES string
+        :param sdf: Output .sdf file
+        :return: A dictionary containing the prediction result
+        """
+
+        outputs = self._inference(self._preprocessmol([mol]))
+        postprocess_inputs = {'descs': outputs}
+        results = self._postprocess(postprocess_inputs)
+
+        if sdf is not None:
+            if not sdf.endswith('.sdf'):
+                print('must provide a sdf name end up with \'.sdf\'')
+                return results
+
+            writer = Chem.SDWriter(sdf)
+            
+
+            for p in results:
+                p_upper = p.upper()
+                if p == 'smiles':
+                    mol.SetProp(p_upper, results[p])
+                else:
+                    mol.SetProp(p_upper, ','.join(str(x) for x in results[p]))
+
+            name = sdf.strip('.sdf')
+            mol.SetProp('_Name', name)
+
+            writer.write(mol)
 
         return results
 

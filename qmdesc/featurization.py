@@ -145,21 +145,21 @@ class MolGraph:
         # mapping from bond index to the index of the reverse bond
 
         # Convert smiles to molecule
-        mol = Chem.MolFromSmiles(smiles)
+        self.mol = Chem.MolFromSmiles(smiles)
 
         # Add explicit Hs
-        mol = Chem.AddHs(mol)
+        self.mol = Chem.AddHs(self.mol)
 
         # fake the number of "atoms" if we are collapsing substructures
-        self.n_atoms = mol.GetNumAtoms()
+        self.n_atoms = self.mol.GetNumAtoms()
 
         # mapping from real bond index (the same as in target) to the f_bonds, since each real has two bond features,
         # only save the index of first one, the second one should be the first_index + 1
-        self.b2br = np.zeros([len(mol.GetBonds()), 2])
-        self.bond_types = [b.GetBondTypeAsDouble() for b in mol.GetBonds()]
+        self.b2br = np.zeros([len(self.mol.GetBonds()), 2])
+        self.bond_types = [b.GetBondTypeAsDouble() for b in self.mol.GetBonds()]
 
         # Get atom features
-        for i, atom in enumerate(mol.GetAtoms()):
+        for i, atom in enumerate(self.mol.GetAtoms()):
             self.f_atoms.append(atom_features(atom))
         self.f_atoms = [self.f_atoms[i] for i in range(self.n_atoms)]
 
@@ -169,7 +169,82 @@ class MolGraph:
         # Get bond features
         for a1 in range(self.n_atoms):
             for a2 in range(a1 + 1, self.n_atoms):
-                bond = mol.GetBondBetweenAtoms(a1, a2)
+                bond = self.mol.GetBondBetweenAtoms(a1, a2)
+
+                if bond is None:
+                    continue
+
+                f_bond = bond_features(bond)
+
+                self.f_bonds.append(self.f_atoms[a1] + f_bond)
+                self.f_bonds.append(self.f_atoms[a2] + f_bond)
+
+                # Update index mappings
+                b1 = self.n_bonds
+                b2 = b1 + 1
+                self.a2b[a2].append(b1)  # b1 = a1 --> a2
+                self.b2a.append(a1)
+                self.a2b[a1].append(b2)  # b2 = a2 --> a1
+                self.b2a.append(a2)
+                self.b2revb.append(b2)
+                self.b2revb.append(b1)
+                self.b2br[bond.GetIdx(), :] = [self.n_bonds, self.n_bonds + 1]
+                self.n_bonds += 2
+class MolGraph_Mol:
+    """
+    A MolGraph represents the graph structure and featurization of a single molecule.
+    A MolGraph computes the following attributes:
+    - smiles: Smiles string.
+    - n_atoms: The number of atoms in the molecule.
+    - n_bonds: The number of bonds in the molecule.
+    - f_atoms: A mapping from an atom index to a list atom features.
+    - f_bonds: A mapping from a bond index to a list of bond features.
+    - a2b: A mapping from an atom index to a list of incoming bond indices.
+    - b2a: A mapping from a bond index to the index of the atom the bond originates from.
+    - b2revb: A mapping from a bond index to the index of the reverse bond.
+    """
+
+    def __init__(self, mol):
+        """
+        Computes the graph structure and featurization of a molecule.
+        :param smiles: A smiles string.
+        """
+
+        self.n_atoms = 0  # number of atoms
+        self.n_bonds = 0  # number of bonds
+        self.f_atoms = []  # mapping from atom index to atom features
+        self.f_bonds = []  # mapping from bond index to concat(in_atom, bond) features
+        self.a2b = []  # mapping from atom index to incoming bond indices
+        self.b2a = []  # mapping from bond index to the index of the atom the bond is coming from
+        self.b2revb = []
+        # mapping from bond index to the index of the reverse bond
+
+        # Convert smiles to molecule
+        self.mol = mol
+
+        # Add explicit Hs
+
+
+        # fake the number of "atoms" if we are collapsing substructures
+        self.n_atoms = self.mol.GetNumAtoms()
+
+        # mapping from real bond index (the same as in target) to the f_bonds, since each real has two bond features,
+        # only save the index of first one, the second one should be the first_index + 1
+        self.b2br = np.zeros([len(self.mol.GetBonds()), 2])
+        self.bond_types = [b.GetBondTypeAsDouble() for b in self.mol.GetBonds()]
+
+        # Get atom features
+        for i, atom in enumerate(self.mol.GetAtoms()):
+            self.f_atoms.append(atom_features(atom))
+        self.f_atoms = [self.f_atoms[i] for i in range(self.n_atoms)]
+
+        for _ in range(self.n_atoms):
+            self.a2b.append([])
+
+        # Get bond features
+        for a1 in range(self.n_atoms):
+            for a2 in range(a1 + 1, self.n_atoms):
+                bond = self.mol.GetBondBetweenAtoms(a1, a2)
 
                 if bond is None:
                     continue
@@ -208,8 +283,8 @@ class BatchMolGraph:
     """
 
     def __init__(self, mol_graphs: List[MolGraph]):
-        self.smiles_batch = [mol_graph.smiles for mol_graph in mol_graphs]
-        self.n_mols = len(self.smiles_batch)
+        # self.smiles_batch = [mol_graph.smiles for mol_graph in mol_graphs]
+        # self.n_mols = len(self.smiles_batch)
 
         self.atom_fdim = get_atom_fdim()
         self.bond_fdim = get_bond_fdim() + self.atom_fdim
@@ -317,6 +392,19 @@ def mol2graph(smiles_batch: List[str]) -> BatchMolGraph:
     mol_graphs = []
     for smiles in smiles_batch:
         mol_graph = MolGraph(smiles)
+        mol_graphs.append(mol_graph)
+
+    return BatchMolGraph(mol_graphs)
+
+def mol2graph_mol(mol_batch) -> BatchMolGraph:
+    """
+    Converts a list of SMILES strings to a BatchMolGraph containing the batch of molecular graphs.
+    :param smiles_batch: A list of SMILES strings.
+    :return: A BatchMolGraph containing the combined molecular graph for the molecules
+    """
+    mol_graphs = []
+    for mol in mol_batch:
+        mol_graph = MolGraph_Mol(mol)
         mol_graphs.append(mol_graph)
 
     return BatchMolGraph(mol_graphs)
